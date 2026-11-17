@@ -130,23 +130,40 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
 <main class="wrap" id="view"></main>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous"></script>
 <script>
 (function () {
   "use strict";
 
   /* ---------- Storage ---------- */
+  // Same Supabase project as the Invoice App, so one account works for both.
+  var CLOUD = { url: "https://zdrbchehajccpmevyeju.supabase.co", anonKey: "sb_publishable_HZNYqaV5nNiVKvdh30Zwvg_yulSkI2V" };
+  var framed = false; try { framed = window.self !== window.top; } catch (e) { framed = true; }
+  var cloudOn = !!(CLOUD.url && CLOUD.anonKey && window.supabase && !framed);
+  var sb = null, user = null, intakeKey = null, loading = false, cloudErr = "";
+  var pending = {}, inflight = 0, known = {}, channel = null, busy = false;
   var KEY = "leadtracker.v1";
   function load() { try { var s = localStorage.getItem(KEY); if (s) return JSON.parse(s); } catch (e) {} return null; }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+  // Signed out: everything is kept in this browser. Signed in: each change goes to the account.
+  function save(what) {
+    if (!user) { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} return; }
+    if (what === "sources") check(sb.from("lead_sources").upsert(S.sources.map(sourceRow)));
+    else if (what === "settings") check(sb.from("lead_settings").upsert({ user_id: user.id, untouched_min: S.settings.untouchedMin, stale_days: S.settings.staleDays }));
+    else if (what && what.id) { known[what.id] = 1; pending[what.id] = what; flush(); }
+  }
+  function removeRow(table, id) { if (user) check(sb.from(table).delete().eq("id", id)); else save(); }
+  function uid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); });
+  }
   function fresh() {
     return {
       sources: [
-        { id: "google-lsa", name: "Google Local Services", cost: 0 },
-        { id: "google-ads", name: "Google Ads", cost: 0 },
-        { id: "angi", name: "Angi / HomeAdvisor", cost: 0 },
-        { id: "thumbtack", name: "Thumbtack", cost: 0 },
-        { id: "referral", name: "Referral / word of mouth", cost: 0 }
+        { id: "google-lsa", kind: "google_lsa", name: "Google Local Services", cost: 0 },
+        { id: "google-ads", kind: "google_ads", name: "Google Ads", cost: 0 },
+        { id: "angi", kind: "angi", name: "Angi / HomeAdvisor", cost: 0 },
+        { id: "thumbtack", kind: "thumbtack", name: "Thumbtack", cost: 0 },
+        { id: "referral", kind: "other", name: "Referral / word of mouth", cost: 0 }
       ],
       leads: [],
       settings: { untouchedMin: 15, staleDays: 3 }
@@ -173,6 +190,154 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
   function median(a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
   function source(id) { for (var i = 0; i < S.sources.length; i++) if (S.sources[i].id === id) return S.sources[i]; return { id: id, name: "Unknown source", cost: 0 }; }
   function lead(id) { for (var i = 0; i < S.leads.length; i++) if (S.leads[i].id === id) return S.leads[i]; return null; }
+
+  /* ---------- Accounts and sync ---------- */
+  function sourceRow(s) { return { id: s.id, user_id: user.id, name: s.name, kind: s.kind || "other", cost_per_lead: s.cost || 0 }; }
+  function sourceFromRow(r) { return { id: r.id, name: r.name, kind: r.kind, cost: +r.cost_per_lead || 0 }; }
+  function leadRow_(l) {
+    return { id: l.id, user_id: user.id, source_id: l.sourceId || null, name: l.name, phone: l.phone, email: l.email, service: l.service, notes: l.notes,
+      cost: l.cost || 0, status: l.status, follow_up: l.followUp || null, quote_amount: l.quote || null, won_amount: l.won || null, lost_reason: l.lostReason || null,
+      bad_reason: l.bad ? l.bad.reason : null, credit_status: l.bad ? l.bad.credit : null, attempts: l.attempts, created_at: new Date(l.createdAt).toISOString() };
+  }
+  function leadFromRow(r) {
+    return { id: r.id, name: r.name || "", phone: r.phone || "", email: r.email || "", service: r.service || "", notes: r.notes || "", sourceId: r.source_id,
+      cost: +r.cost || 0, createdAt: Date.parse(r.created_at), status: r.status || "new", attempts: Array.isArray(r.attempts) ? r.attempts : [], followUp: r.follow_up || null,
+      quote: +r.quote_amount || 0, won: +r.won_amount || 0, lostReason: r.lost_reason || "", bad: r.bad_reason ? { reason: r.bad_reason, credit: r.credit_status || "none" } : null };
+  }
+  function syncFail() { toast("Couldn't save. It will retry when you're back online."); }
+  function check(p) { p.then(function (r) { if (r.error) { console.error(r.error); syncFail(); } }, syncFail); }
+  function flush() {
+    if (!user) return;
+    Object.keys(pending).forEach(function (id) {
+      var l = pending[id]; delete pending[id]; inflight++;
+      var fail = function () { inflight--; if (!pending[id]) pending[id] = l; syncFail(); };
+      sb.from("leads").upsert(leadRow_(l)).then(function (r) { if (r.error) { console.error(r.error); fail(); } else inflight--; }, fail);
+    });
+  }
+  function fetchLeads() { return sb.from("leads").select("*").order("created_at", { ascending: false }).limit(2000); }
+  function loadCloud() {
+    loading = true; cloudErr = ""; render();
+    Promise.all([
+      sb.from("lead_sources").select("*").order("created_at").order("name"),
+      fetchLeads(),
+      sb.from("lead_settings").select("*").maybeSingle(),
+      sb.from("lead_intake_keys").select("key").maybeSingle()
+    ]).then(function (r) {
+      var err = r[0].error || r[1].error || r[2].error || r[3].error; if (err) throw err;
+      var st = r[2].data, jobs = [];
+      S = { sources: r[0].data.map(sourceFromRow), leads: r[1].data.map(leadFromRow), settings: { untouchedMin: st ? st.untouched_min : 15, staleDays: st ? st.stale_days : 3 } };
+      known = {}; S.leads.forEach(function (l) { known[l.id] = 1; });
+      intakeKey = r[3].data ? r[3].data.key : null;
+      if (!S.sources.length) {
+        S.sources = fresh().sources.map(function (s) { s.id = uid(); return s; });
+        jobs.push(sb.from("lead_sources").insert(S.sources.map(sourceRow)));
+      }
+      if (!intakeKey) {
+        var a = new Uint8Array(20); crypto.getRandomValues(a);
+        intakeKey = Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+        jobs.push(sb.from("lead_intake_keys").insert({ user_id: user.id, key: intakeKey }));
+      }
+      return Promise.all(jobs);
+    }).then(function (rs) {
+      rs.forEach(function (r) { if (r.error) throw r.error; });
+      loading = false; render(); startLive();
+    }).catch(function (e) {
+      console.error(e); loading = false; S = fresh();
+      cloudErr = "Couldn't load your leads. Check your connection and reload the page."; render();
+    });
+  }
+  // Pulls the latest leads. Runs when a new lead arrives, once a minute, and when the app comes back into view.
+  function refresh() {
+    if (!user || loading || busy || inflight || Object.keys(pending).length) return;
+    busy = true;
+    fetchLeads().then(function (r) {
+      busy = false;
+      if (r.error || !user || inflight || Object.keys(pending).length) return;
+      var list = r.data.map(leadFromRow), arrived = [];
+      list.forEach(function (l) { if (!known[l.id]) arrived.push(l); known[l.id] = 1; });
+      S.leads = list;
+      if (arrived.length) announce(arrived);
+      if (["today", "leads", "costs"].indexOf(UI.view) >= 0) render(); else badge();
+    }, function () { busy = false; });
+  }
+  function announce(list) {
+    var msg = list.length === 1 ? "New lead: " + (list[0].name || list[0].phone || "no name") : list.length + " new leads";
+    toast(msg);
+    try { var C = window.AudioContext || window.webkitAudioContext, c = new C(), o = c.createOscillator(), g = c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.value = 0.08; o.start(); o.stop(c.currentTime + 0.25); } catch (e) {}
+    try { if (window.Notification && Notification.permission === "granted") new Notification("Lead Tracker", { body: msg + ". Contact them now." }); } catch (e) {}
+  }
+  function startLive() {
+    stopLive();
+    try {
+      channel = sb.channel("leads-" + user.id)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "leads", filter: "user_id=eq." + user.id }, function () { refresh(); })
+        .subscribe();
+    } catch (e) {}
+  }
+  function stopLive() { if (channel) { try { sb.removeChannel(channel); } catch (e) {} channel = null; } }
+  function onUser(u) {
+    if ((u && u.id) === (user && user.id)) return;
+    user = u || null; pending = {};
+    if (user) { if (UI.view === "account" && !UI.recover) { UI.view = "today"; syncHash(); } loadCloud(); }
+    else { stopLive(); intakeKey = null; cloudErr = ""; S = load() || fresh(); render(); }
+  }
+  function initCloud() {
+    try { sb = window.supabase.createClient(CLOUD.url, CLOUD.anonKey); } catch (e) { cloudOn = false; return; }
+    sb.auth.onAuthStateChange(function (ev, session) {
+      if (ev === "PASSWORD_RECOVERY") { UI.recover = true; UI.view = "account"; }
+      onUser(session && session.user);
+      if (ev === "PASSWORD_RECOVERY") render();
+    });
+    sb.auth.getSession().then(function (r) { onUser(r.data && r.data.session && r.data.session.user); }, function () {});
+    setInterval(refresh, 60000);
+    setInterval(function () { if (Object.keys(pending).length) flush(); }, 15000);
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+  }
+  function authMsg(t) { var m = document.getElementById("aMsg"); if (m) m.textContent = t; }
+  function authDo(kind) {
+    var email = document.getElementById("aEmail").value.trim(), pw = document.getElementById("aPass").value, back = location.origin + location.pathname, p;
+    if (!email || (kind !== "forgot" && !pw)) { authMsg(kind === "forgot" ? "Enter your email first." : "Enter your email and password."); return; }
+    if (kind === "up" && pw.length < 8) { authMsg("Use a password of at least 8 characters."); return; }
+    authMsg("Working…");
+    if (kind === "in") p = sb.auth.signInWithPassword({ email: email, password: pw });
+    else if (kind === "up") p = sb.auth.signUp({ email: email, password: pw, options: { emailRedirectTo: back } });
+    else p = sb.auth.resetPasswordForEmail(email, { redirectTo: back });
+    p.then(function (r) {
+      if (r.error) authMsg(r.error.message);
+      else if (kind === "up" && !(r.data && r.data.session)) authMsg("Check your email to confirm your account, then sign in here.");
+      else if (kind === "forgot") authMsg("Check your email for a link to reset your password.");
+    }, function () { authMsg("Couldn't reach the server. Check your connection."); });
+  }
+  function viewAccount() {
+    if (UI.recover) {
+      return '<h1>Choose a new password</h1><div class="panel"><label class="f"><span>New password</span><input id="aPass" type="password" autocomplete="new-password"></label>' +
+        '<p class="small" id="aMsg" role="status"></p><div class="row"><button class="btn primary" data-act="setPass">Save password</button></div></div>';
+    }
+    return '<div class="row"><button class="btn ghost" data-act="toSetup">← Setup</button></div><h1>Sign in</h1>' +
+      '<div class="panel"><p class="muted small">Uses the same account as the Invoice App. Signing in keeps your leads on every device and lets leads arrive automatically.</p><div class="grid2">' +
+      '<label class="f"><span>Email</span><input id="aEmail" type="email" autocomplete="email"></label>' +
+      '<label class="f"><span>Password</span><input id="aPass" type="password" autocomplete="current-password"></label></div>' +
+      '<p class="small" id="aMsg" role="status"></p>' +
+      '<div class="row"><button class="btn primary" data-act="signIn">Sign in</button><button class="btn" data-act="signUp">Create account</button><button class="btn ghost" data-act="forgot">Forgot password</button></div></div>';
+  }
+  function copyField(labelText, value) {
+    return '<label class="f"><span>' + labelText + '</span><span class="row" style="flex-wrap:nowrap"><input readonly value="' + esc(value) + '"><button class="btn" data-act="copy">Copy</button></span></label>';
+  }
+  function intakePanel() {
+    var base = CLOUD.url + "/functions/v1/lead-intake?source=", k = "&key=" + intakeKey;
+    var canNotify = window.Notification && Notification.permission === "default";
+    return '<div class="panel"><h2>Automatic lead intake</h2><p class="muted small">Paste each address into its lead vendor once. After that, new leads show up here on their own, with an alert.</p>' +
+      "<div><strong>Google Ads lead forms</strong><p class='muted small'>In the lead form, open “Export leads from Google Ads”, then “Other data integration options”, and fill in both boxes. Use “Send test data” to check it.</p></div>" +
+      copyField("Webhook URL", base + "google_ads") + copyField("Key", intakeKey) +
+      "<div><strong>Angi / HomeAdvisor</strong><p class='muted small'>Email this address and your Angi account number to crmintegrations@angi.com and ask them to send your leads to it.</p></div>" +
+      copyField("Address", base + "angi" + k) +
+      "<div><strong>Thumbtack</strong><p class='muted small'>In Thumbtack, add a webhook for Leads (thumbtack.com/pro/webhooks/list) and paste this address.</p></div>" +
+      copyField("Address", base + "thumbtack" + k) +
+      "<div><strong>Anything else</strong><p class='muted small'>For a website form or a tool like Zapier. Send name, phone, email, service, notes and cost.</p></div>" +
+      copyField("Address", base + "other" + k) +
+      '<p class="muted small">Keep these private. Anyone who has one can add leads to your account.</p>' +
+      (canNotify ? '<div class="row"><button class="btn" data-act="notify">Turn on new-lead notifications</button></div>' : "") + "</div>";
+  }
 
   /* ---------- Rules: what counts as waiting, due, going cold ---------- */
   function isOpen(l) { return !l.bad && (l.status === "new" || l.status === "contacted" || l.status === "quoted"); }
@@ -222,13 +387,15 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
 
   /* ---------- Screen state ---------- */
   var VIEWS = ["today", "leads", "costs", "setup"];
-  var UI = { view: "today", leadId: null, filter: "open", src: "all", q: "", period: "month", how: "call", armed: null };
+  var UI = { view: "today", leadId: null, filter: "open", src: "all", q: "", period: "month", how: "call", armed: null, recover: false };
   function fromHash() { var h = location.hash.replace("#", ""); return VIEWS.indexOf(h) >= 0 ? h : "today"; }
   function go(view, id) {
     UI.view = view; UI.leadId = id || null; UI.armed = null;
-    var h = view === "lead" || view === "new" || view === "edit" ? "leads" : view;
-    if (fromHash() !== h) { try { history.replaceState(null, "", "#" + h); } catch (e) { location.hash = h; } }
-    render(); window.scrollTo(0, 0);
+    syncHash(); render(); window.scrollTo(0, 0);
+  }
+  function syncHash() {
+    var v = UI.view, h = v === "lead" || v === "new" || v === "edit" ? "leads" : v === "account" ? "setup" : v;
+    if (fromHash() !== h || !location.hash) { try { history.replaceState(null, "", "#" + h); } catch (e) { location.hash = h; } }
   }
   window.addEventListener("hashchange", function () { UI.view = fromHash(); UI.leadId = null; render(); });
 
@@ -254,8 +421,8 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
   function viewToday() {
     var now = Date.now(), today = ymd(new Date());
     if (!S.leads.length) {
-      return '<h1>Today</h1><div class="panel"><div class="empty"><p>No leads yet. Add one, or load sample leads to see how it works.</p>' +
-        '<div class="row"><button class="btn primary" data-act="new">Add a lead</button><button class="btn" data-act="sample">Load sample leads</button></div></div></div>';
+      return '<h1>Today</h1><div class="panel"><div class="empty"><p>' + (user ? "No leads yet. Connect a lead source in Setup, or add one by hand." : "No leads yet. Add one, or load sample leads to see how it works.") + '</p>' +
+        '<div class="row"><button class="btn primary" data-act="new">Add a lead</button>' + (user ? '<button class="btn" data-act="toSetup">Open Setup</button>' : '<button class="btn" data-act="sample">Load sample leads</button>') + "</div></div></div>";
     }
     var waiting = S.leads.filter(isUntouched).sort(function (a, b) { return a.createdAt - b.createdAt; });
     var late = waiting.filter(function (l) { return isLate(l, now); });
@@ -329,7 +496,7 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
     if (!l) { l = { id: uid(), createdAt: Date.now(), status: "new", attempts: [], followUp: null, quote: 0, won: 0, lostReason: "", bad: null }; S.leads.push(l); }
     l.name = v("fName"); l.phone = v("fPhone"); l.email = v("fEmail"); l.service = v("fService"); l.notes = v("fNotes");
     l.sourceId = v("fSource"); l.cost = num(v("fCost"));
-    save(); go("lead", l.id); toast("Lead saved");
+    save(l); go("lead", l.id); toast("Lead saved");
   }
 
   /* ---------- One lead ---------- */
@@ -400,7 +567,7 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
     l.attempts.push({ at: Date.now(), how: UI.how, result: result, note: document.getElementById("aNote").value.trim() });
     l.followUp = document.getElementById("aNext").value || null;
     if (l.status === "new") l.status = "contacted";
-    save(); render(); toast(l.followUp ? "Saved. Next follow-up " + l.followUp : "Attempt saved");
+    save(l); render(); toast(l.followUp ? "Saved. Next follow-up " + l.followUp : "Attempt saved");
   }
   function saveOutcome() {
     var l = lead(UI.leadId); if (!l) return;
@@ -412,7 +579,7 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
     if (st === "lost" && !l.lostReason) { toast("Choose why it was lost"); return; }
     l.status = st;
     if (st === "won" || st === "lost") l.followUp = null;
-    save(); render(); toast("Outcome saved");
+    save(l); render(); toast("Outcome saved");
   }
 
   /* ---------- Costs ---------- */
@@ -450,7 +617,10 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
   function viewSetup() {
     var counts = {}; S.leads.forEach(function (l) { counts[l.sourceId] = (counts[l.sourceId] || 0) + 1; });
     var hasSample = S.leads.some(function (l) { return l.sample; });
-    return "<h1>Setup</h1>" +
+    var acct = "";
+    if (cloudOn && user) acct = '<div class="panel"><div class="row spread"><div><h2>Account</h2><p class="muted small">Signed in as ' + esc(user.email) + '</p></div><button class="btn" data-act="signOut">Sign out</button></div></div>' + intakePanel();
+    else if (cloudOn) acct = '<div class="panel"><h2>Account</h2><p class="muted small">Sign in to keep leads on every device and to receive leads automatically from Google, Angi and Thumbtack.</p><div class="row"><button class="btn primary" data-act="toAccount">Sign in or create account</button></div></div>';
+    return "<h1>Setup</h1>" + acct +
       '<div class="panel"><h2>Lead sources</h2><p class="muted small">Set the usual price of one lead from each source. New leads from that source start at this cost, and you can change it on any single lead.</p>' +
       S.sources.map(function (s) {
         var n = counts[s.id] || 0;
@@ -463,9 +633,9 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
       '<label class="f"><span>Flag a new lead as late after (minutes)</span><input id="sMin" inputmode="numeric" value="' + S.settings.untouchedMin + '"></label>' +
       '<label class="f"><span>Flag a lead as going cold after (days)</span><input id="sDays" inputmode="numeric" value="' + S.settings.staleDays + '"></label>' +
       '</div><div class="row"><button class="btn primary" data-act="saveAlerts">Save alerts</button></div></div>' +
-      '<div class="panel"><h2>Data</h2><p class="muted small">For now, leads are saved in this browser on this device. Accounts and automatic lead intake come in the next step.</p><div class="row">' +
+      (user ? "" : '<div class="panel"><h2>Data</h2><p class="muted small">While signed out, leads are saved in this browser on this device only.</p><div class="row">' +
       (hasSample ? '<button class="btn" data-act="clearSample">Remove sample leads</button>' : '<button class="btn" data-act="sample">Load sample leads</button>') +
-      '<button class="btn danger' + (UI.armed === "wipe" ? " armed" : "") + '" data-act="wipe">' + (UI.armed === "wipe" ? "Tap again to erase everything" : "Erase everything") + "</button></div></div>";
+      '<button class="btn danger' + (UI.armed === "wipe" ? " armed" : "") + '" data-act="wipe">' + (UI.armed === "wipe" ? "Tap again to erase everything" : "Erase everything") + "</button></div></div>");
   }
   function saveSources(quiet) {
     S.sources.forEach(function (s) {
@@ -473,7 +643,7 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
       if (n && n.value.trim()) s.name = n.value.trim();
       if (c) s.cost = num(c.value);
     });
-    save(); if (!quiet) { render(); toast("Sources saved"); }
+    save("sources"); if (!quiet) { render(); toast("Sources saved"); }
   }
 
   /* ---------- Sample leads ---------- */
@@ -509,23 +679,30 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
   /* ---------- Render and events ---------- */
   function render() {
     var v = document.getElementById("view"), l = UI.leadId ? lead(UI.leadId) : null, h;
-    if (UI.view === "lead" && l) h = viewLead(l);
+    if (loading) h = '<div class="panel"><div class="empty">Loading your leads…</div></div>';
+    else if (UI.view === "account" && cloudOn && (!user || UI.recover)) h = viewAccount();
+    else if (UI.view === "lead" && l) h = viewLead(l);
     else if (UI.view === "edit" && l) h = viewForm(l);
     else if (UI.view === "new") h = viewForm(null);
     else if (UI.view === "leads" || UI.view === "lead" || UI.view === "edit") { UI.view = "leads"; h = viewLeads(); }
     else if (UI.view === "costs") h = viewCosts();
     else if (UI.view === "setup") h = viewSetup();
     else { UI.view = "today"; h = viewToday(); }
-    v.innerHTML = h;
-    var tab = UI.view === "lead" || UI.view === "new" || UI.view === "edit" ? "leads" : UI.view;
+    v.innerHTML = (cloudErr ? '<div class="notice urgent">' + esc(cloudErr) + "</div>" : "") + h;
+    var tab = UI.view === "lead" || UI.view === "new" || UI.view === "edit" ? "leads" : UI.view === "account" ? "setup" : UI.view;
     document.querySelectorAll("[data-nav]").forEach(function (a) { if (a.getAttribute("data-nav") === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
-    var now = Date.now(), today = ymd(new Date());
+    badge();
+  }
+  function badge() {
+    var today = ymd(new Date());
     var n = S.leads.filter(function (x) { return isUntouched(x) || isDue(x, today); }).length;
     var c = document.getElementById("navCount"); c.hidden = !n; c.textContent = n;
     document.title = (n ? "(" + n + ") " : "") + "Lead Tracker";
   }
 
   document.addEventListener("click", function (e) {
+    var nav = e.target.closest("[data-nav]");
+    if (nav) { e.preventDefault(); go(nav.getAttribute("data-nav")); return; }
     var el = e.target.closest("[data-act]"); if (!el) return;
     var act = el.getAttribute("data-act"), l = UI.leadId ? lead(UI.leadId) : null;
     if (act !== "delLead" && act !== "wipe") UI.armed = null;
@@ -539,19 +716,35 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
     else if (act === "how") { UI.how = el.getAttribute("data-v"); document.querySelectorAll('[data-act="how"]').forEach(function (b) { b.setAttribute("aria-pressed", b === el); }); }
     else if (act === "logAttempt") logAttempt();
     else if (act === "saveOutcome") saveOutcome();
-    else if (act === "saveBad" && l) { l.bad = { reason: document.getElementById("bWhy").value, credit: document.getElementById("bCredit").value }; l.followUp = null; save(); render(); toast("Marked as a bad lead"); }
-    else if (act === "unBad" && l) { l.bad = null; save(); render(); }
+    else if (act === "saveBad" && l) { l.bad = { reason: document.getElementById("bWhy").value, credit: document.getElementById("bCredit").value }; l.followUp = null; save(l); render(); toast("Marked as a bad lead"); }
+    else if (act === "unBad" && l) { l.bad = null; save(l); render(); }
     else if (act === "delLead" && l) {
-      if (UI.armed === "del") { S.leads = S.leads.filter(function (x) { return x !== l; }); save(); go("leads"); toast("Lead deleted"); }
+      if (UI.armed === "del") { S.leads = S.leads.filter(function (x) { return x !== l; }); removeRow("leads", l.id); go("leads"); toast("Lead deleted"); }
       else { UI.armed = "del"; render(); }
     }
+    else if (act === "toAccount") go("account");
+    else if (act === "toSetup") go("setup");
+    else if (act === "signIn") authDo("in");
+    else if (act === "signUp") authDo("up");
+    else if (act === "forgot") authDo("forgot");
+    else if (act === "signOut") { sb.auth.signOut().then(function () { toast("Signed out"); }, function () {}); }
+    else if (act === "setPass") {
+      var np = document.getElementById("aPass").value;
+      if (np.length < 8) { authMsg("Use a password of at least 8 characters."); return; }
+      sb.auth.updateUser({ password: np }).then(function (r) { if (r.error) authMsg(r.error.message); else { UI.recover = false; go("today"); toast("Password saved"); } }, function () { authMsg("Couldn't reach the server."); });
+    }
+    else if (act === "copy") {
+      var box = el.parentNode.querySelector("input");
+      try { navigator.clipboard.writeText(box.value).then(function () { toast("Copied"); }, function () { box.select(); toast("Press Ctrl+C to copy"); }); } catch (err) { box.select(); toast("Press Ctrl+C to copy"); }
+    }
+    else if (act === "notify") { try { Notification.requestPermission().then(function () { render(); }); } catch (err) {} }
     else if (act === "saveSources") saveSources();
-    else if (act === "addSource") { saveSources(true); S.sources.push({ id: uid(), name: "New source", cost: 0 }); save(); render(); }
-    else if (act === "delSource") { saveSources(true); var id = el.getAttribute("data-id"); if (S.sources.length > 1) { S.sources = S.sources.filter(function (s) { return s.id !== id; }); save(); } render(); }
+    else if (act === "addSource") { saveSources(true); S.sources.push({ id: uid(), kind: "other", name: "New source", cost: 0 }); save("sources"); render(); }
+    else if (act === "delSource") { saveSources(true); var id = el.getAttribute("data-id"); if (S.sources.length > 1) { S.sources = S.sources.filter(function (s) { return s.id !== id; }); removeRow("lead_sources", id); } render(); }
     else if (act === "saveAlerts") {
       S.settings.untouchedMin = Math.max(1, Math.round(num(document.getElementById("sMin").value)) || 15);
       S.settings.staleDays = Math.max(1, Math.round(num(document.getElementById("sDays").value)) || 3);
-      save(); render(); toast("Alerts saved");
+      save("settings"); render(); toast("Alerts saved");
     }
     else if (act === "sample") { loadSample(); go("today"); toast("Sample leads loaded"); }
     else if (act === "clearSample") { S.leads = S.leads.filter(function (x) { return !x.sample; }); save(); render(); toast("Sample leads removed"); }
@@ -573,6 +766,7 @@ tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--in
 
   UI.view = fromHash();
   render();
+  if (cloudOn) initCloud();
 
   // For tests only.
   window.__lead = { state: function () { return S; }, breakdown: breakdown };
