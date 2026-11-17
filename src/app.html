@@ -1,0 +1,580 @@
+<title>Lead Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Shares its look with the Invoice App: same colors, type and components. */
+:root {
+  --bg: #F2F4F1; --surface: #FFFFFF; --ink: #17201C; --muted: #5B6862; --line: #D9E0DB;
+  --accent: #1D6A50; --accent-ink: #FFFFFF; --accent-soft: #E1EEE7;
+  --warn: #8F5400; --warn-soft: #FAEDD5; --bad: #A3322A; --bad-soft: #F8E1DE;
+  --draft: #55606B; --draft-soft: #E6E9EC;
+  --font-display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F1513; --surface: #18201D; --ink: #E5ECE8; --muted: #97A59E; --line: #2A3530;
+    --accent: #5EC498; --accent-ink: #0B1410; --accent-soft: #1B3228;
+    --warn: #F0B35A; --warn-soft: #3A2A12; --bad: #F08B80; --bad-soft: #3B1B18;
+    --draft: #AAB4BD; --draft-soft: #262D33; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.15; margin: 0; text-wrap: balance; }
+h1 { font-size: 24px; } h2 { font-size: 17px; }
+p { margin: 0; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+.bar { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.bar-in { max-width: 880px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 16px; }
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 24px; height: 24px; border: 2px solid var(--accent); border-radius: 50%; position: relative; }
+.brand-mark::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--accent); }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav a { font: 500 14px var(--font-body); color: var(--muted); padding: 8px 12px; border-radius: 8px; text-decoration: none; display: inline-flex; gap: 6px; align-items: center; }
+nav a[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
+.count { font: 600 11px var(--font-num); background: var(--bad); color: var(--surface); border-radius: 999px; padding: 1px 6px; }
+
+.wrap { max-width: 880px; margin: 0 auto; padding: 20px 16px 64px; display: grid; gap: 20px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.spread { justify-content: space-between; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+.btn { font: 600 14px var(--font-body); display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; text-decoration: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); padding-inline: 8px; }
+.btn.danger { color: var(--bad); }
+.btn.danger.armed { background: var(--bad); border-color: var(--bad); color: var(--surface); }
+.btn:focus-visible, nav a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .doc-row:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.notice { background: var(--warn-soft); border-radius: var(--radius); padding: 12px 14px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.notice.urgent { background: var(--bad-soft); }
+
+.summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.summary > div { padding: 14px 16px; min-width: 0; }
+.summary > div + div { border-left: 1px solid var(--line); }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.big { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 500; margin-top: 2px; overflow-wrap: anywhere; }
+.big.bad { color: var(--bad); }
+@media (max-width: 520px) {
+  .summary { grid-template-columns: 1fr 1fr; }
+  .summary > div:first-child { grid-column: 1 / -1; border-bottom: 1px solid var(--line); }
+  .summary > div:nth-child(2) { border-left: 0; }
+}
+
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font: 500 13px var(--font-body); padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+.list { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.doc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 16px; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; align-items: center; }
+.doc-row + .doc-row { border-top: 1px solid var(--line); }
+.doc-row:hover { background: var(--bg); }
+.doc-client { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-meta { font-size: 13px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.doc-side { text-align: right; display: grid; gap: 4px; justify-items: end; }
+.empty { padding: 32px 16px; text-align: center; color: var(--muted); display: grid; gap: 12px; justify-items: center; }
+
+.pill { font: 600 11px var(--font-body); text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 999px; white-space: nowrap; display: inline-block; }
+.pill.new { background: var(--warn-soft); color: var(--warn); }
+.pill.contacted { background: var(--accent-soft); color: var(--accent); }
+.pill.quoted { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.pill.won { background: var(--accent); color: var(--accent-ink); }
+.pill.lost, .pill.badlead { background: var(--draft-soft); color: var(--draft); }
+.pill.late { background: var(--bad-soft); color: var(--bad); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: grid; gap: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } }
+.f { display: grid; gap: 4px; min-width: 0; }
+.f > span { font-size: 12px; font-weight: 600; color: var(--muted); }
+.full { grid-column: 1 / -1; }
+input, select, textarea { font: 15px var(--font-body); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; width: 100%; min-width: 0; }
+textarea { min-height: 70px; resize: vertical; }
+input[inputmode="decimal"] { font-family: var(--font-num); }
+
+.tbl-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 640px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; padding: 8px 6px; border-bottom: 2px solid var(--ink); white-space: nowrap; }
+td { padding: 10px 6px; border-bottom: 1px solid var(--line); }
+th.r, td.r { text-align: right; }
+td.r { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total td { font-weight: 600; border-bottom: 0; border-top: 2px solid var(--ink); }
+.leak { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; }
+.leak + .leak { border-top: 1px solid var(--line); }
+.leak .amt { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-weight: 500; text-align: right; }
+.history { display: grid; gap: 0; }
+.history > div { padding: 10px 0; display: grid; gap: 2px; }
+.history > div + div { border-top: 1px solid var(--line); }
+.src-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px auto; gap: 10px; align-items: end; }
+@media (max-width: 520px) { .src-row { grid-template-columns: 1fr 110px auto; } }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-weight: 500; z-index: 20; }
+</style>
+
+<header class="bar">
+  <div class="bar-in">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Lead Tracker</div>
+    <nav aria-label="Sections">
+      <a href="#today" data-nav="today">Today <span class="count" id="navCount" hidden></span></a>
+      <a href="#leads" data-nav="leads">Leads</a>
+      <a href="#costs" data-nav="costs">Costs</a>
+      <a href="#setup" data-nav="setup">Setup</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap" id="view"></main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- Storage ---------- */
+  var KEY = "leadtracker.v1";
+  function load() { try { var s = localStorage.getItem(KEY); if (s) return JSON.parse(s); } catch (e) {} return null; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+  function fresh() {
+    return {
+      sources: [
+        { id: "google-lsa", name: "Google Local Services", cost: 0 },
+        { id: "google-ads", name: "Google Ads", cost: 0 },
+        { id: "angi", name: "Angi / HomeAdvisor", cost: 0 },
+        { id: "thumbtack", name: "Thumbtack", cost: 0 },
+        { id: "referral", name: "Referral / word of mouth", cost: 0 }
+      ],
+      leads: [],
+      settings: { untouchedMin: 15, staleDays: 3 }
+    };
+  }
+  var S = load() || fresh();
+
+  /* ---------- Helpers ---------- */
+  var DAY = 86400000;
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+  function money(n) { return usd.format(n || 0); }
+  function num(v) { var n = parseFloat(String(v == null ? "" : v).replace(/[^0-9.\-]/g, "")); return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0; }
+  function ymd(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function addDays(n, from) { var d = from ? new Date(from) : new Date(); d.setDate(d.getDate() + n); return ymd(d); }
+  function dayDiff(a, b) { return Math.round((new Date(a + "T00:00:00") - new Date(b + "T00:00:00")) / DAY); }
+  function ago(ms) {
+    var m = Math.max(0, Math.round(ms / 60000));
+    if (m < 60) return m + " min";
+    if (m < 60 * 48) return Math.round(m / 60) + " hr";
+    return Math.round(m / 1440) + " days";
+  }
+  function when(ts) { return new Date(ts).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+  function median(a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  function source(id) { for (var i = 0; i < S.sources.length; i++) if (S.sources[i].id === id) return S.sources[i]; return { id: id, name: "Unknown source", cost: 0 }; }
+  function lead(id) { for (var i = 0; i < S.leads.length; i++) if (S.leads[i].id === id) return S.leads[i]; return null; }
+
+  /* ---------- Rules: what counts as waiting, due, going cold ---------- */
+  function isOpen(l) { return !l.bad && (l.status === "new" || l.status === "contacted" || l.status === "quoted"); }
+  function lastAttempt(l) { return l.attempts.length ? l.attempts[l.attempts.length - 1].at : null; }
+  function firstContact(l) { return l.attempts.length ? l.attempts[0].at : null; }
+  function isUntouched(l) { return isOpen(l) && l.attempts.length === 0; }
+  function isLate(l, now) { return isUntouched(l) && now - l.createdAt > S.settings.untouchedMin * 60000; }
+  function isDue(l, today) { return isOpen(l) && l.attempts.length > 0 && !!l.followUp && l.followUp <= today; }
+  function isCold(l, now) { return isOpen(l) && l.attempts.length > 0 && !l.followUp && now - lastAttempt(l) > S.settings.staleDays * DAY; }
+  // A lead you paid for and were credited back costs nothing.
+  function paid(l) { return l.bad && l.bad.credit === "credited" ? 0 : (l.cost || 0); }
+  // Suggested gap before the next try: 1, 2, 3, 5, then 7 days.
+  function nextGap(attempts) { return [1, 2, 3, 5][attempts - 1] || 7; }
+
+  function inPeriod(l, period, now) {
+    if (period === "all") return true;
+    if (period === "month") { var d = new Date(now), c = new Date(l.createdAt); return d.getFullYear() === c.getFullYear() && d.getMonth() === c.getMonth(); }
+    return now - l.createdAt <= (period === "90" ? 90 : 30) * DAY;
+  }
+
+  function breakdown(period, now) {
+    var rows = {}, order = [];
+    S.sources.forEach(function (s) { rows[s.id] = blank(s.name); order.push(s.id); });
+    function blank(name) { return { name: name, leads: 0, spent: 0, contacted: 0, waits: [], won: 0, revenue: 0 }; }
+    var leak = { untouched: { n: 0, amt: 0 }, early: { n: 0, amt: 0 }, bad: { n: 0, amt: 0 }, credited: { n: 0, amt: 0 } };
+    S.leads.forEach(function (l) {
+      if (!inPeriod(l, period, now)) return;
+      if (!rows[l.sourceId]) { rows[l.sourceId] = blank(source(l.sourceId).name); order.push(l.sourceId); }
+      var r = rows[l.sourceId];
+      r.leads++; r.spent += paid(l);
+      if (l.attempts.length) { r.contacted++; r.waits.push(firstContact(l) - l.createdAt); }
+      if (l.status === "won") { r.won++; r.revenue += l.won || 0; }
+      if (l.bad) {
+        if (l.bad.credit === "credited") { leak.credited.n++; leak.credited.amt += l.cost || 0; }
+        else { leak.bad.n++; leak.bad.amt += l.cost || 0; }
+      } else if (l.attempts.length === 0 && l.status !== "won") { leak.untouched.n++; leak.untouched.amt += l.cost || 0; }
+      else if (l.attempts.length <= 2 && (l.status === "lost" || isCold(l, now))) { leak.early.n++; leak.early.amt += l.cost || 0; }
+    });
+    var list = order.map(function (id) { return rows[id]; }).filter(function (r) { return r.leads > 0; });
+    var total = blank("All sources");
+    list.forEach(function (r) {
+      total.leads += r.leads; total.spent += r.spent; total.contacted += r.contacted; total.won += r.won; total.revenue += r.revenue;
+      total.waits = total.waits.concat(r.waits);
+    });
+    return { rows: list, total: total, leak: leak };
+  }
+
+  /* ---------- Screen state ---------- */
+  var VIEWS = ["today", "leads", "costs", "setup"];
+  var UI = { view: "today", leadId: null, filter: "open", src: "all", q: "", period: "month", how: "call", armed: null };
+  function fromHash() { var h = location.hash.replace("#", ""); return VIEWS.indexOf(h) >= 0 ? h : "today"; }
+  function go(view, id) {
+    UI.view = view; UI.leadId = id || null; UI.armed = null;
+    var h = view === "lead" || view === "new" || view === "edit" ? "leads" : view;
+    if (fromHash() !== h) { try { history.replaceState(null, "", "#" + h); } catch (e) { location.hash = h; } }
+    render(); window.scrollTo(0, 0);
+  }
+  window.addEventListener("hashchange", function () { UI.view = fromHash(); UI.leadId = null; render(); });
+
+  var toastTimer;
+  function toast(msg) { var t = document.getElementById("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2200); }
+
+  /* ---------- Shared pieces ---------- */
+  function statusPill(l) {
+    if (l.bad) return '<span class="pill badlead">Bad lead</span>';
+    var names = { new: "New", contacted: "Contacted", quoted: "Quoted", won: "Won", lost: "Lost" };
+    return '<span class="pill ' + l.status + '">' + names[l.status] + "</span>";
+  }
+  function leadRow(l, side) {
+    return '<button class="doc-row" data-act="open" data-id="' + l.id + '">' +
+      '<div style="min-width:0"><div class="doc-client">' + esc(l.name || "No name") + "</div>" +
+      '<div class="doc-meta"><span>' + esc(l.service || "No service noted") + "</span><span>·</span><span>" + esc(source(l.sourceId).name) + "</span></div></div>" +
+      '<div class="doc-side">' + side + "</div></button>";
+  }
+  function sourceOptions(sel) { return S.sources.map(function (s) { return '<option value="' + s.id + '"' + (s.id === sel ? " selected" : "") + ">" + esc(s.name) + "</option>"; }).join(""); }
+  function options(list, sel) { return list.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === sel ? " selected" : "") + ">" + o[1] + "</option>"; }).join(""); }
+
+  /* ---------- Today ---------- */
+  function viewToday() {
+    var now = Date.now(), today = ymd(new Date());
+    if (!S.leads.length) {
+      return '<h1>Today</h1><div class="panel"><div class="empty"><p>No leads yet. Add one, or load sample leads to see how it works.</p>' +
+        '<div class="row"><button class="btn primary" data-act="new">Add a lead</button><button class="btn" data-act="sample">Load sample leads</button></div></div></div>';
+    }
+    var waiting = S.leads.filter(isUntouched).sort(function (a, b) { return a.createdAt - b.createdAt; });
+    var late = waiting.filter(function (l) { return isLate(l, now); });
+    var due = S.leads.filter(function (l) { return isDue(l, today); }).sort(function (a, b) { return a.followUp < b.followUp ? -1 : 1; });
+    var cold = S.leads.filter(function (l) { return isCold(l, now); });
+    var spent = 0; S.leads.forEach(function (l) { if (inPeriod(l, "month", now)) spent += paid(l); });
+    var h = '<div class="row spread"><h1>Today</h1><button class="btn primary" data-act="new">Add a lead</button></div>';
+    if (late.length) h += '<div class="notice urgent"><strong>' + late.length + (late.length === 1 ? " lead has" : " leads have") + " waited more than " + S.settings.untouchedMin + " minutes for a first contact.</strong></div>";
+    h += '<div class="summary"><div><div class="label">Waiting for first contact</div><div class="big' + (late.length ? " bad" : "") + '">' + waiting.length + "</div></div>" +
+      '<div><div class="label">Follow-ups due</div><div class="big">' + due.length + "</div></div>" +
+      '<div><div class="label">Spent this month</div><div class="big">' + money(spent) + "</div></div></div>";
+    if (waiting.length) {
+      h += "<section><h2>Contact these first</h2><p class='muted small' style='margin:4px 0 10px'>Paid for and not contacted yet. Longest wait at the top.</p><div class='list'>" +
+        waiting.map(function (l) { return leadRow(l, '<span class="pill ' + (isLate(l, now) ? "late" : "new") + '">Waiting ' + ago(now - l.createdAt) + '</span><span class="small muted num">' + money(l.cost) + "</span>"); }).join("") + "</div></section>";
+    }
+    if (due.length) {
+      h += "<section><h2>Follow up today</h2><div class='list' style='margin-top:10px'>" +
+        due.map(function (l) { var d = dayDiff(today, l.followUp); return leadRow(l, '<span class="pill ' + (d > 0 ? "late" : "contacted") + '">' + (d > 0 ? d + (d === 1 ? " day late" : " days late") : "Due today") + '</span><span class="small muted">Attempt ' + (l.attempts.length + 1) + "</span>"); }).join("") + "</div></section>";
+    }
+    if (cold.length) {
+      h += "<section><h2>Going cold</h2><p class='muted small' style='margin:4px 0 10px'>Contacted, but no next step is set and nothing has happened for " + S.settings.staleDays + " days or more.</p><div class='list'>" +
+        cold.map(function (l) { return leadRow(l, '<span class="pill lost">' + l.attempts.length + (l.attempts.length === 1 ? " attempt" : " attempts") + '</span><span class="small muted">Last ' + ago(now - lastAttempt(l)) + " ago</span>"); }).join("") + "</div></section>";
+    }
+    if (!waiting.length && !due.length && !cold.length) h += '<div class="panel"><div class="empty">Nothing is waiting. Every open lead has been contacted and has a next step.</div></div>';
+    return h;
+  }
+
+  /* ---------- Leads ---------- */
+  var FILTERS = [["open", "Open"], ["new", "New"], ["contacted", "Contacted"], ["quoted", "Quoted"], ["won", "Won"], ["lost", "Lost"], ["bad", "Bad"], ["all", "All"]];
+  function matches(l) {
+    if (UI.src !== "all" && l.sourceId !== UI.src) return false;
+    if (UI.filter === "open" && !isOpen(l)) return false;
+    if (UI.filter === "bad" && !l.bad) return false;
+    if (["new", "contacted", "quoted", "won", "lost"].indexOf(UI.filter) >= 0 && (l.bad || l.status !== UI.filter)) return false;
+    var q = UI.q.trim().toLowerCase();
+    if (q && [l.name, l.phone, l.email, l.service].join(" ").toLowerCase().indexOf(q) < 0) return false;
+    return true;
+  }
+  function leadList() {
+    var now = Date.now();
+    var list = S.leads.filter(matches).sort(function (a, b) { return b.createdAt - a.createdAt; });
+    if (!list.length) return '<div class="empty">No leads match.</div>';
+    return list.map(function (l) { return leadRow(l, statusPill(l) + '<span class="small muted">' + ago(now - l.createdAt) + " ago · <span class='num'>" + money(l.cost) + "</span></span>"); }).join("");
+  }
+  function viewLeads() {
+    return '<div class="row spread"><h1>Leads</h1><button class="btn primary" data-act="new">Add a lead</button></div>' +
+      '<div class="grid2"><label class="f"><span>Search</span><input id="q" type="search" placeholder="Name, phone, email or service" value="' + esc(UI.q) + '"></label>' +
+      '<label class="f"><span>Source</span><select id="srcFilter"><option value="all">All sources</option>' + sourceOptions(UI.src) + "</select></label></div>" +
+      '<div class="chips">' + FILTERS.map(function (f) { return '<button class="chip" data-act="filter" data-v="' + f[0] + '" aria-pressed="' + (UI.filter === f[0]) + '">' + f[1] + "</button>"; }).join("") + "</div>" +
+      '<div class="list" id="leadList">' + leadList() + "</div>";
+  }
+
+  /* ---------- Add / edit a lead ---------- */
+  function viewForm(l) {
+    var isNew = !l; l = l || { name: "", phone: "", email: "", service: "", notes: "", sourceId: S.sources[0].id, cost: S.sources[0].cost };
+    return '<div class="row"><button class="btn ghost" data-act="back">← Back</button></div><h1>' + (isNew ? "Add a lead" : "Edit lead") + "</h1>" +
+      '<div class="panel"><div class="grid2">' +
+      '<label class="f"><span>Name</span><input id="fName" value="' + esc(l.name) + '" autocomplete="off"></label>' +
+      '<label class="f"><span>Phone</span><input id="fPhone" type="tel" value="' + esc(l.phone) + '" autocomplete="off"></label>' +
+      '<label class="f"><span>Email</span><input id="fEmail" type="email" value="' + esc(l.email) + '" autocomplete="off"></label>' +
+      '<label class="f"><span>Service wanted</span><input id="fService" value="' + esc(l.service) + '"></label>' +
+      '<label class="f"><span>Lead source</span><select id="fSource">' + sourceOptions(l.sourceId) + "</select></label>" +
+      '<label class="f"><span>What this lead cost ($)</span><input id="fCost" inputmode="decimal" value="' + (l.cost || "") + '" placeholder="0.00"></label>' +
+      '<label class="f full"><span>Notes</span><textarea id="fNotes">' + esc(l.notes) + "</textarea></label>" +
+      '</div><div class="row"><button class="btn primary" data-act="saveLead">' + (isNew ? "Save lead" : "Save changes") + '</button><button class="btn" data-act="back">Cancel</button></div></div>';
+  }
+  function saveLead() {
+    var v = function (id) { return document.getElementById(id).value.trim(); };
+    if (!v("fName") && !v("fPhone") && !v("fEmail")) { toast("Add a name, phone or email first"); return; }
+    var l = UI.view === "edit" ? lead(UI.leadId) : null;
+    if (!l) { l = { id: uid(), createdAt: Date.now(), status: "new", attempts: [], followUp: null, quote: 0, won: 0, lostReason: "", bad: null }; S.leads.push(l); }
+    l.name = v("fName"); l.phone = v("fPhone"); l.email = v("fEmail"); l.service = v("fService"); l.notes = v("fNotes");
+    l.sourceId = v("fSource"); l.cost = num(v("fCost"));
+    save(); go("lead", l.id); toast("Lead saved");
+  }
+
+  /* ---------- One lead ---------- */
+  var HOW = [["call", "Call"], ["text", "Text"], ["email", "Email"], ["visit", "In person"]];
+  var RESULT = [["noanswer", "No answer"], ["voicemail", "Left a voicemail"], ["sent", "Sent a message"], ["spoke", "Spoke with them"]];
+  var LOST = [["", "Choose a reason"], ["competitor", "Went with someone else"], ["price", "Price too high"], ["noresponse", "Never responded"], ["notready", "Not ready yet"], ["other", "Other"]];
+  var BADWHY = [["wrongnumber", "Wrong or disconnected number"], ["duplicate", "Duplicate lead"], ["area", "Outside service area"], ["notreal", "Not a real request"], ["other", "Other"]];
+  var CREDIT = [["none", "Not requested"], ["requested", "Requested, waiting"], ["credited", "Credited back"], ["denied", "Denied"]];
+  function label(list, key) { for (var i = 0; i < list.length; i++) if (list[i][0] === key) return list[i][1]; return key; }
+
+  function viewLead(l) {
+    var now = Date.now();
+    var h = '<div class="row"><button class="btn ghost" data-act="back">← Leads</button></div>' +
+      '<div class="row spread"><div><h1>' + esc(l.name || "No name") + '</h1><p class="muted">' + esc(l.service || "No service noted") + "</p></div>" + statusPill(l) + "</div>";
+    if (isUntouched(l)) h += '<div class="notice' + (isLate(l, now) ? " urgent" : "") + '"><strong>No contact yet. Waiting ' + ago(now - l.createdAt) + ".</strong></div>";
+    h += '<div class="summary"><div><div class="label">Source</div><div style="font-weight:600;margin-top:2px">' + esc(source(l.sourceId).name) + "</div></div>" +
+      '<div><div class="label">Cost</div><div class="big">' + money(l.cost) + "</div></div>" +
+      '<div><div class="label">Received</div><div style="margin-top:2px">' + when(l.createdAt) + "</div></div></div>";
+
+    var contact = "";
+    if (l.phone) contact += '<div class="row spread"><span class="num">' + esc(l.phone) + '</span><span class="row"><a class="btn" href="tel:' + esc(l.phone.replace(/[^0-9+]/g, "")) + '">Call</a><a class="btn" href="sms:' + esc(l.phone.replace(/[^0-9+]/g, "")) + '">Text</a></span></div>';
+    if (l.email) contact += '<div class="row spread"><span style="overflow-wrap:anywhere">' + esc(l.email) + '</span><a class="btn" href="mailto:' + esc(l.email) + '">Email</a></div>';
+    if (l.notes) contact += '<p class="muted" style="white-space:pre-line">' + esc(l.notes) + "</p>";
+    h += '<div class="panel"><div class="row spread"><h2>Contact</h2><button class="btn ghost" data-act="edit">Edit details</button></div>' + (contact || '<p class="muted">No contact details yet.</p>') + "</div>";
+
+    if (isOpen(l)) {
+      h += '<div class="panel"><h2>Log a contact attempt</h2>' +
+        '<div class="chips">' + HOW.map(function (o) { return '<button class="chip" data-act="how" data-v="' + o[0] + '" aria-pressed="' + (UI.how === o[0]) + '">' + o[1] + "</button>"; }).join("") + "</div>" +
+        '<div class="grid2"><label class="f"><span>What happened</span><select id="aResult">' + options(RESULT, "noanswer") + "</select></label>" +
+        '<label class="f"><span>Follow up again on</span><input id="aNext" type="date" value="' + addDays(nextGap(l.attempts.length + 1)) + '"></label>' +
+        '<label class="f full"><span>Note</span><input id="aNote" placeholder="Optional"></label></div>' +
+        '<div class="row"><button class="btn primary" data-act="logAttempt">Save attempt</button><span class="muted small">Attempt ' + (l.attempts.length + 1) + ". Clear the date if no follow-up is needed.</span></div></div>";
+    }
+
+    h += '<div class="panel"><h2>Outcome</h2><div class="grid2">' +
+      '<label class="f"><span>Status</span><select id="oStatus">' + options([["new", "New"], ["contacted", "Contacted"], ["quoted", "Quoted"], ["won", "Won"], ["lost", "Lost"]], l.status) + "</select></label>" +
+      '<label class="f"><span>Quote amount ($)</span><input id="oQuote" inputmode="decimal" value="' + (l.quote || "") + '" placeholder="0.00"></label>' +
+      '<label class="f"><span>Amount won ($)</span><input id="oWon" inputmode="decimal" value="' + (l.won || "") + '" placeholder="Fill in when the job is won"></label>' +
+      '<label class="f"><span>If lost, why</span><select id="oLost">' + options(LOST, l.lostReason || "") + "</select></label>" +
+      '</div><div class="row"><button class="btn primary" data-act="saveOutcome">Save outcome</button></div></div>';
+
+    h += '<div class="panel"><h2>Bad lead</h2><p class="muted small">Mark leads you should not have paid for, and track whether the vendor credited you.</p>';
+    if (l.bad) {
+      h += '<div class="grid2"><label class="f"><span>Reason</span><select id="bWhy">' + options(BADWHY, l.bad.reason) + "</select></label>" +
+        '<label class="f"><span>Credit from the vendor</span><select id="bCredit">' + options(CREDIT, l.bad.credit) + "</select></label></div>" +
+        '<div class="row"><button class="btn primary" data-act="saveBad">Save</button><button class="btn" data-act="unBad">Not a bad lead</button></div>';
+    } else {
+      h += '<div class="grid2"><label class="f"><span>Reason</span><select id="bWhy">' + options(BADWHY, "wrongnumber") + "</select></label>" +
+        '<label class="f"><span>Credit from the vendor</span><select id="bCredit">' + options(CREDIT, "none") + "</select></label></div>" +
+        '<div class="row"><button class="btn" data-act="saveBad">Mark as bad lead</button></div>';
+    }
+    h += "</div>";
+
+    h += '<div class="panel"><h2>History</h2><div class="history">' +
+      l.attempts.slice().reverse().map(function (a, i) {
+        return "<div><div><strong>" + label(HOW, a.how) + "</strong> · " + label(RESULT, a.result) + ' <span class="muted small">· attempt ' + (l.attempts.length - i) + "</span></div>" +
+          '<div class="muted small">' + when(a.at) + (a.note ? " · " + esc(a.note) : "") + "</div></div>";
+      }).join("") +
+      '<div><div><strong>Lead received</strong></div><div class="muted small">' + when(l.createdAt) +
+      (l.attempts.length ? " · first contact after " + ago(firstContact(l) - l.createdAt) : "") + "</div></div></div></div>";
+
+    h += '<div class="row"><button class="btn danger' + (UI.armed === "del" ? " armed" : "") + '" data-act="delLead">' + (UI.armed === "del" ? "Tap again to delete" : "Delete lead") + "</button></div>";
+    return h;
+  }
+  function logAttempt() {
+    var l = lead(UI.leadId); if (!l) return;
+    var result = document.getElementById("aResult").value;
+    l.attempts.push({ at: Date.now(), how: UI.how, result: result, note: document.getElementById("aNote").value.trim() });
+    l.followUp = document.getElementById("aNext").value || null;
+    if (l.status === "new") l.status = "contacted";
+    save(); render(); toast(l.followUp ? "Saved. Next follow-up " + l.followUp : "Attempt saved");
+  }
+  function saveOutcome() {
+    var l = lead(UI.leadId); if (!l) return;
+    var st = document.getElementById("oStatus").value, won = num(document.getElementById("oWon").value);
+    l.quote = num(document.getElementById("oQuote").value);
+    l.lostReason = document.getElementById("oLost").value;
+    if (st === "won" && !won) { toast("Enter the amount won"); return; }
+    l.won = st === "won" ? won : 0;
+    if (st === "lost" && !l.lostReason) { toast("Choose why it was lost"); return; }
+    l.status = st;
+    if (st === "won" || st === "lost") l.followUp = null;
+    save(); render(); toast("Outcome saved");
+  }
+
+  /* ---------- Costs ---------- */
+  var PERIODS = [["month", "This month"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["all", "All time"]];
+  function pct(a, b) { return b ? Math.round((a / b) * 100) + "%" : "—"; }
+  function costRow(r, cls) {
+    var m = median(r.waits);
+    return '<tr class="' + (cls || "") + '"><td>' + esc(r.name) + '</td><td class="r">' + r.leads + '</td><td class="r">' + money(r.spent) + '</td><td class="r">' + pct(r.contacted, r.leads) +
+      '</td><td class="r">' + (m == null ? "—" : ago(m)) + '</td><td class="r">' + r.won + '</td><td class="r">' + money(r.revenue) +
+      '</td><td class="r">' + (r.won ? money(r.spent / r.won) : "—") + '</td><td class="r">' + (r.spent ? money(r.revenue / r.spent) : "—") + "</td></tr>";
+  }
+  function viewCosts() {
+    var b = breakdown(UI.period, Date.now()), t = b.total, k = b.leak;
+    var h = "<h1>Costs</h1>" +
+      '<div class="chips">' + PERIODS.map(function (p) { return '<button class="chip" data-act="period" data-v="' + p[0] + '" aria-pressed="' + (UI.period === p[0]) + '">' + p[1] + "</button>"; }).join("") + "</div>";
+    if (!t.leads) return h + '<div class="panel"><div class="empty">No leads in this period.</div></div>';
+    h += '<div class="summary"><div><div class="label">Spent on leads</div><div class="big">' + money(t.spent) + "</div></div>" +
+      '<div><div class="label">Revenue won</div><div class="big">' + money(t.revenue) + "</div></div>" +
+      '<div><div class="label">Back per $1 spent</div><div class="big">' + (t.spent ? money(t.revenue / t.spent) : "—") + "</div></div></div>";
+    function leakRow(title, sub, o, good) {
+      return '<div class="leak"><div><strong>' + title + '</strong></div><div class="amt"' + (good ? ' style="color:var(--accent)"' : "") + ">" + money(o.amt) + '</div><div class="muted small">' + sub + '</div><div class="muted small" style="text-align:right">' + o.n + (o.n === 1 ? " lead" : " leads") + "</div></div>";
+    }
+    h += '<div class="panel"><h2>Where lead money is leaking</h2><div>' +
+      leakRow("Not contacted", "Paid for, with no contact attempt logged yet.", k.untouched) +
+      leakRow("Given up after 1 or 2 attempts", "Lost or gone cold before a third try.", k.early) +
+      leakRow("Bad leads not credited", "Wrong number, duplicate or out of area, and still paid for.", k.bad) +
+      leakRow("Credits recovered", "Bad leads the vendor credited back.", k.credited, true) + "</div></div>";
+    h += '<div class="panel"><h2>By lead source</h2><div class="tbl-wrap"><table><thead><tr><th>Source</th><th class="r">Leads</th><th class="r">Spent</th><th class="r">Contacted</th><th class="r">First contact</th><th class="r">Won</th><th class="r">Revenue</th><th class="r">Cost per job</th><th class="r">Back per $1</th></tr></thead><tbody>' +
+      b.rows.map(function (r) { return costRow(r); }).join("") + costRow(t, "total") + "</tbody></table></div>" +
+      '<p class="muted small">First contact is the typical (median) wait between a lead arriving and the first attempt. Spent leaves out leads the vendor credited back.</p></div>';
+    return h;
+  }
+
+  /* ---------- Setup ---------- */
+  function viewSetup() {
+    var counts = {}; S.leads.forEach(function (l) { counts[l.sourceId] = (counts[l.sourceId] || 0) + 1; });
+    var hasSample = S.leads.some(function (l) { return l.sample; });
+    return "<h1>Setup</h1>" +
+      '<div class="panel"><h2>Lead sources</h2><p class="muted small">Set the usual price of one lead from each source. New leads from that source start at this cost, and you can change it on any single lead.</p>' +
+      S.sources.map(function (s) {
+        var n = counts[s.id] || 0;
+        return '<div class="src-row"><label class="f"><span>Source</span><input data-src-name="' + s.id + '" value="' + esc(s.name) + '"></label>' +
+          '<label class="f"><span>Cost per lead ($)</span><input data-src-cost="' + s.id + '" inputmode="decimal" value="' + (s.cost || "") + '" placeholder="0.00"></label>' +
+          (n ? '<span class="muted small" style="padding-bottom:12px">' + n + (n === 1 ? " lead" : " leads") + "</span>" : '<button class="btn ghost danger" data-act="delSource" data-id="' + s.id + '">Remove</button>') + "</div>";
+      }).join("") +
+      '<div class="row"><button class="btn primary" data-act="saveSources">Save sources</button><button class="btn" data-act="addSource">Add a source</button></div></div>' +
+      '<div class="panel"><h2>Alerts</h2><div class="grid2">' +
+      '<label class="f"><span>Flag a new lead as late after (minutes)</span><input id="sMin" inputmode="numeric" value="' + S.settings.untouchedMin + '"></label>' +
+      '<label class="f"><span>Flag a lead as going cold after (days)</span><input id="sDays" inputmode="numeric" value="' + S.settings.staleDays + '"></label>' +
+      '</div><div class="row"><button class="btn primary" data-act="saveAlerts">Save alerts</button></div></div>' +
+      '<div class="panel"><h2>Data</h2><p class="muted small">For now, leads are saved in this browser on this device. Accounts and automatic lead intake come in the next step.</p><div class="row">' +
+      (hasSample ? '<button class="btn" data-act="clearSample">Remove sample leads</button>' : '<button class="btn" data-act="sample">Load sample leads</button>') +
+      '<button class="btn danger' + (UI.armed === "wipe" ? " armed" : "") + '" data-act="wipe">' + (UI.armed === "wipe" ? "Tap again to erase everything" : "Erase everything") + "</button></div></div>";
+  }
+  function saveSources(quiet) {
+    S.sources.forEach(function (s) {
+      var n = document.querySelector('[data-src-name="' + s.id + '"]'), c = document.querySelector('[data-src-cost="' + s.id + '"]');
+      if (n && n.value.trim()) s.name = n.value.trim();
+      if (c) s.cost = num(c.value);
+    });
+    save(); if (!quiet) { render(); toast("Sources saved"); }
+  }
+
+  /* ---------- Sample leads ---------- */
+  function loadSample() {
+    var price = { "google-lsa": 45, "google-ads": 32, angi: 58, thumbtack: 27, referral: 0 };
+    S.sources.forEach(function (s) { if (!s.cost && price[s.id]) s.cost = price[s.id]; });
+    var now = Date.now(), MIN = 60000, HR = 3600000;
+    function mk(name, service, src, agoMs, o) {
+      o = o || {};
+      var l = { id: uid(), sample: true, name: name, phone: "(305) 555-01" + String(10 + S.leads.length).slice(-2), email: "", service: service, notes: "",
+        sourceId: src, cost: price[src] || 0, createdAt: now - agoMs, status: o.status || "new", attempts: [], followUp: o.followUp || null, quote: o.quote || 0, won: o.won || 0, lostReason: o.lost || "", bad: o.bad || null };
+      (o.tries || []).forEach(function (t) { l.attempts.push({ at: l.createdAt + t[0], how: t[1] || "call", result: t[2] || "noanswer", note: "" }); });
+      S.leads.push(l);
+    }
+    mk("Dana Whitfield", "AC not cooling", "google-lsa", 6 * MIN);
+    mk("Marcus Bell", "Water heater replacement", "angi", 52 * MIN);
+    mk("Priya Raman", "Gutter cleaning", "thumbtack", 5 * HR);
+    mk("Tom Okafor", "Drain clog", "google-lsa", 2 * DAY, { status: "contacted", followUp: addDays(0), tries: [[9 * MIN, "call", "noanswer"], [DAY, "text", "sent"]] });
+    mk("Elena Sorvino", "Fence repair", "google-ads", 4 * DAY, { status: "contacted", followUp: addDays(-1), tries: [[3 * HR, "call", "voicemail"]] });
+    mk("Chris Halloran", "Bathroom remodel quote", "angi", 9 * DAY, { status: "contacted", tries: [[26 * HR, "call", "noanswer"]] });
+    mk("Renee Castillo", "AC replacement", "google-lsa", 6 * DAY, { status: "quoted", quote: 6400, followUp: addDays(2), tries: [[4 * MIN, "call", "spoke"], [2 * DAY, "email", "sent"]] });
+    mk("Jamal Pierce", "AC tune-up", "google-lsa", 12 * DAY, { status: "won", quote: 540, won: 540, tries: [[3 * MIN, "call", "spoke"]] });
+    mk("Sofia Lindqvist", "Roof leak repair", "google-ads", 15 * DAY, { status: "won", quote: 1800, won: 1650, tries: [[20 * MIN, "call", "voicemail"], [DAY, "call", "spoke"], [3 * DAY, "call", "spoke"]] });
+    mk("Walter Nguyen", "Kitchen faucet install", "referral", 10 * DAY, { status: "won", quote: 700, won: 700, tries: [[HR, "call", "spoke"]] });
+    mk("Bianca Torres", "Pressure washing", "thumbtack", 14 * DAY, { status: "lost", lost: "noresponse", tries: [[7 * HR, "call", "noanswer"]] });
+    mk("Greg Mahoney", "Water heater replacement", "angi", 18 * DAY, { status: "lost", lost: "competitor", tries: [[30 * HR, "call", "spoke"], [3 * DAY, "call", "noanswer"]] });
+    mk("Unknown caller", "Wrong number", "angi", 8 * DAY, { bad: { reason: "wrongnumber", credit: "none" }, tries: [[15 * MIN, "call", "noanswer"]] });
+    mk("Duplicate: J. Pierce", "AC tune-up", "google-lsa", 11 * DAY, { bad: { reason: "duplicate", credit: "credited" } });
+    mk("Hannah Ostrowski", "Gutter cleaning", "thumbtack", 20 * DAY, { status: "won", quote: 320, won: 320, tries: [[45 * MIN, "text", "sent"], [DAY, "call", "spoke"]] });
+    save();
+  }
+
+  /* ---------- Render and events ---------- */
+  function render() {
+    var v = document.getElementById("view"), l = UI.leadId ? lead(UI.leadId) : null, h;
+    if (UI.view === "lead" && l) h = viewLead(l);
+    else if (UI.view === "edit" && l) h = viewForm(l);
+    else if (UI.view === "new") h = viewForm(null);
+    else if (UI.view === "leads" || UI.view === "lead" || UI.view === "edit") { UI.view = "leads"; h = viewLeads(); }
+    else if (UI.view === "costs") h = viewCosts();
+    else if (UI.view === "setup") h = viewSetup();
+    else { UI.view = "today"; h = viewToday(); }
+    v.innerHTML = h;
+    var tab = UI.view === "lead" || UI.view === "new" || UI.view === "edit" ? "leads" : UI.view;
+    document.querySelectorAll("[data-nav]").forEach(function (a) { if (a.getAttribute("data-nav") === tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+    var now = Date.now(), today = ymd(new Date());
+    var n = S.leads.filter(function (x) { return isUntouched(x) || isDue(x, today); }).length;
+    var c = document.getElementById("navCount"); c.hidden = !n; c.textContent = n;
+    document.title = (n ? "(" + n + ") " : "") + "Lead Tracker";
+  }
+
+  document.addEventListener("click", function (e) {
+    var el = e.target.closest("[data-act]"); if (!el) return;
+    var act = el.getAttribute("data-act"), l = UI.leadId ? lead(UI.leadId) : null;
+    if (act !== "delLead" && act !== "wipe") UI.armed = null;
+    if (act === "open") go("lead", el.getAttribute("data-id"));
+    else if (act === "new") go("new");
+    else if (act === "edit") go("edit", UI.leadId);
+    else if (act === "back") { if (UI.view === "edit") go("lead", UI.leadId); else go("leads"); }
+    else if (act === "saveLead") saveLead();
+    else if (act === "filter") { UI.filter = el.getAttribute("data-v"); render(); }
+    else if (act === "period") { UI.period = el.getAttribute("data-v"); render(); }
+    else if (act === "how") { UI.how = el.getAttribute("data-v"); document.querySelectorAll('[data-act="how"]').forEach(function (b) { b.setAttribute("aria-pressed", b === el); }); }
+    else if (act === "logAttempt") logAttempt();
+    else if (act === "saveOutcome") saveOutcome();
+    else if (act === "saveBad" && l) { l.bad = { reason: document.getElementById("bWhy").value, credit: document.getElementById("bCredit").value }; l.followUp = null; save(); render(); toast("Marked as a bad lead"); }
+    else if (act === "unBad" && l) { l.bad = null; save(); render(); }
+    else if (act === "delLead" && l) {
+      if (UI.armed === "del") { S.leads = S.leads.filter(function (x) { return x !== l; }); save(); go("leads"); toast("Lead deleted"); }
+      else { UI.armed = "del"; render(); }
+    }
+    else if (act === "saveSources") saveSources();
+    else if (act === "addSource") { saveSources(true); S.sources.push({ id: uid(), name: "New source", cost: 0 }); save(); render(); }
+    else if (act === "delSource") { saveSources(true); var id = el.getAttribute("data-id"); if (S.sources.length > 1) { S.sources = S.sources.filter(function (s) { return s.id !== id; }); save(); } render(); }
+    else if (act === "saveAlerts") {
+      S.settings.untouchedMin = Math.max(1, Math.round(num(document.getElementById("sMin").value)) || 15);
+      S.settings.staleDays = Math.max(1, Math.round(num(document.getElementById("sDays").value)) || 3);
+      save(); render(); toast("Alerts saved");
+    }
+    else if (act === "sample") { loadSample(); go("today"); toast("Sample leads loaded"); }
+    else if (act === "clearSample") { S.leads = S.leads.filter(function (x) { return !x.sample; }); save(); render(); toast("Sample leads removed"); }
+    else if (act === "wipe") {
+      if (UI.armed === "wipe") { S = fresh(); save(); UI.armed = null; go("today"); toast("Everything erased"); }
+      else { UI.armed = "wipe"; render(); }
+    }
+  });
+  document.addEventListener("input", function (e) {
+    if (e.target.id === "q") { UI.q = e.target.value; document.getElementById("leadList").innerHTML = leadList(); }
+  });
+  document.addEventListener("change", function (e) {
+    if (e.target.id === "srcFilter") { UI.src = e.target.value; document.getElementById("leadList").innerHTML = leadList(); }
+    else if (e.target.id === "fSource" && UI.view === "new") { document.getElementById("fCost").value = source(e.target.value).cost || ""; }
+  });
+
+  // Keep the waiting times on the Today screen current.
+  setInterval(function () { if (UI.view === "today") render(); }, 30000);
+
+  UI.view = fromHash();
+  render();
+
+  // For tests only.
+  window.__lead = { state: function () { return S; }, breakdown: breakdown };
+})();
+</script>
