@@ -128,9 +128,12 @@ export async function handle(req, env, fetchFn) {
   mapped.lead.raw = body;
   let res, out;
   try {
+    // New-style secret keys (sb_secret_...) go only in the apikey header; older JWT keys also go in Authorization.
+    const headers = { "Content-Type": "application/json", apikey: env.key };
+    if (/^eyJ/.test(env.key)) headers.Authorization = "Bearer " + env.key;
     res = await fetchFn(env.url + "/rest/v1/rpc/lead_intake", {
       method: "POST",
-      headers: { "Content-Type": "application/json", apikey: env.key, Authorization: "Bearer " + env.key },
+      headers,
       body: JSON.stringify({ p_key: key, p_kind: kind, p_lead: mapped.lead }),
     });
     out = await res.json();
@@ -145,5 +148,15 @@ export async function handle(req, env, fetchFn) {
 // @ts-ignore: Deno exists only when this runs on Supabase.
 if (typeof Deno !== "undefined") {
   // @ts-ignore
-  Deno.serve((req) => handle(req, { url: Deno.env.get("SUPABASE_URL"), key: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") }, fetch));
+  // Use the project's secret key: the new-style one if the project has it, otherwise the older service role key.
+  let key = "";
+  try {
+    // @ts-ignore
+    const keys = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}");
+    key = keys.default || Object.values(keys)[0] || "";
+  } catch (_e) { key = ""; }
+  // @ts-ignore
+  if (!key) key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  // @ts-ignore
+  Deno.serve((req) => handle(req, { url: Deno.env.get("SUPABASE_URL"), key }, fetch));
 }
